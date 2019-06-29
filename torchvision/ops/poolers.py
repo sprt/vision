@@ -2,6 +2,7 @@
 import torch
 import torch.nn.functional as F
 from torch import nn
+import torch_xla
 
 from torchvision.ops import roi_align
 from torchvision.ops.boxes import box_area
@@ -154,13 +155,29 @@ class MultiScaleRoIAlign(nn.Module):
         )
 
         for level, (per_level_feature, scale) in enumerate(zip(x, self.scales)):
+            #import pdb; pdb.set_trace()
+
+
+            print("ops/poolers.py - levels.shape: {}, level: {}".format(levels.shape, level))
             idx_in_level = torch.nonzero(levels == level).squeeze(1)
             rois_per_level = rois[idx_in_level]
 
+            xla_device = per_level_feature.device
+            torch_xla._XLAC._xla_sync_multi([per_level_feature, rois_per_level], devices=[])
+
+            per_level_feature_cpu = per_level_feature.cpu().clone()
+            rois_per_level_cpu = rois_per_level.cpu().clone()
             result[idx_in_level] = roi_align(
-                per_level_feature, rois_per_level,
+                per_level_feature_cpu, rois_per_level_cpu,
                 output_size=self.output_size,
                 spatial_scale=scale, sampling_ratio=self.sampling_ratio
-            )
+            ).to(xla_device)
+
+#            result[idx_in_level] = roi_align(
+#                per_level_feature, rois_per_level,
+#                output_size=self.output_size,
+#                spatial_scale=scale, sampling_ratio=self.sampling_ratio
+#            )
+
 
         return result

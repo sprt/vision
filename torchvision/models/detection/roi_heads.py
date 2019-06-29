@@ -271,7 +271,12 @@ def expand_boxes(boxes, scale):
 def expand_masks(mask, padding):
     M = mask.shape[-1]
     scale = float(M + 2 * padding) / M
+    
+    # no clue as repro passes fine
+    # Need this line as without it masks are not accurate.
     padded_mask = torch.nn.functional.pad(mask, (padding,) * 4)
+#    padded_mask = mask  # temporary hack
+
     return padded_mask, scale
 
 
@@ -283,7 +288,9 @@ def paste_mask_in_image(mask, box, im_h, im_w):
     h = max(h, 1)
 
     # Set shape to [batchxCxHxW]
-    mask = mask.expand((1, 1, -1, -1))
+    #mask = mask.expand((1, 1, -1, -1))
+    orig_mask_h, orig_mask_w = mask.shape
+    mask = mask.expand((1, 1, orig_mask_h, orig_mask_w))
 
     # Resize mask
     mask = misc_nn_ops.interpolate(mask, size=(h, w), mode='bilinear', align_corners=False)
@@ -505,6 +512,8 @@ class RoIHeads(torch.nn.Module):
             keep = box_ops.batched_nms(boxes, scores, labels, self.nms_thresh)
             # keep only topk scoring predictions
             keep = keep[:self.detections_per_img]
+
+            # keep.shape = [0]
             boxes, scores, labels = boxes[keep], scores[keep], labels[keep]
 
             all_boxes.append(boxes)
@@ -524,7 +533,9 @@ class RoIHeads(torch.nn.Module):
         if self.training:
             proposals, matched_idxs, labels, regression_targets = self.select_training_samples(proposals, targets)
 
+        print("models/detection/roi_heads.py - RoIHeads.forward.box_roi_pool.forward(...) start")
         box_features = self.box_roi_pool(features, proposals, image_shapes)
+        print("models/detection/roi_heads.py - RoIHeads.forward.box_roi_pool.forward(...) end")
         box_features = self.box_head(box_features)
         class_logits, box_regression = self.box_predictor(box_features)
 
@@ -557,9 +568,18 @@ class RoIHeads(torch.nn.Module):
                     mask_proposals.append(proposals[img_id][pos])
                     pos_matched_idxs.append(matched_idxs[img_id][pos])
 
+            print("models/detection/roi_heads.py - RoIHeads.forward.mask_roi_pool.forward(...) start")
             mask_features = self.mask_roi_pool(features, mask_proposals, image_shapes)
+            print("models/detection/roi_heads.py - RoIHeads.forward.mask_roi_pool.forward(...) end")
+
+
+            print("models/detection/roi_heads.py - (FCN) MaskRCNNHeads.forward(...) start")
             mask_features = self.mask_head(mask_features)
+            print("models/detection/roi_heads.py - (FCN) MaskRCNNHeads.forward(...) end")
+
+            print("models/detection/roi_heads.py - (FCN) MaskRCNNPredictor.forward(...) start")
             mask_logits = self.mask_predictor(mask_features)
+            print("models/detection/roi_heads.py - (FCN) MaskRCNNPredictor.forward(...) end")
 
             loss_mask = {}
             if self.training:

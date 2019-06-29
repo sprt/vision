@@ -5,6 +5,7 @@ Implements the Generalized R-CNN framework
 
 from collections import OrderedDict
 import torch
+import torch_xla
 from torch import nn
 
 
@@ -49,8 +50,28 @@ class GeneralizedRCNN(nn.Module):
         if isinstance(features, torch.Tensor):
             features = OrderedDict([(0, features)])
         proposals, proposal_losses = self.rpn(images, features, targets)
+        print("models/detection/generalized_rcnn.py - RoIHeads.forward(...) start")
         detections, detector_losses = self.roi_heads(features, proposals, images.image_sizes, targets)
-        detections = self.transform.postprocess(detections, images.image_sizes, original_image_sizes)
+        print("models/detection/generalized_rcnn.py - RoIHeads.forward(...) end")
+        print("models/detection/generalized_rcnn.py - GeneralizedRCNNTransform.postprocess(...) start")
+
+        if not self.training:
+            # Sync tensors and use CPU instead for post processing
+            sync_tensors = []
+            for detection in detections:
+                sync_tensors.extend(list(detection.values()))
+            torch_xla._XLAC._xla_sync_multi(sync_tensors, devices=[])
+
+            detections_cpu = []
+            for detection in detections:
+                detection_cpu = {}
+                for k in detection.keys():
+                    detection_cpu[k] = detection[k].cpu().clone()
+                detections_cpu.append(detection_cpu)
+            detections = detections_cpu
+
+        detections = self.transform.postprocess(detections_cpu, images.image_sizes, original_image_sizes)
+        print("models/detection/generalized_rcnn.py - GeneralizedRCNNTransform.postprocess(...) end")
 
         losses = {}
         losses.update(detector_losses)

@@ -1,4 +1,5 @@
 import torch
+import torch_xla
 from torchvision import _C
 
 
@@ -22,7 +23,13 @@ def nms(boxes, scores, iou_threshold):
             of the elements that have been kept
             by NMS, sorted in decreasing order of scores
     """
-    return _C.nms(boxes, scores, iou_threshold)
+    device = boxes.device
+    torch_xla._XLAC._xla_sync_multi([boxes, scores], devices=[])
+    boxes_cpu = boxes.cpu().clone()
+    scores_cpu = scores.cpu().clone()
+    keep = _C.nms(boxes_cpu, scores_cpu, iou_threshold)
+    keep = keep.to(device=device)
+    return keep
 
 
 def batched_nms(boxes, scores, idxs, iou_threshold):
@@ -55,6 +62,7 @@ def batched_nms(boxes, scores, idxs, iou_threshold):
     offsets = idxs.to(boxes) * (max_coordinate + 1)
     boxes_for_nms = boxes + offsets[:, None]
     keep = nms(boxes_for_nms, scores, iou_threshold)
+    print("ops/boxes.py; keep.shape: {}".format(keep.shape))
     return keep
 
 
