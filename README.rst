@@ -1,5 +1,5 @@
 torchvision
-============
+===========
 
 .. image:: https://travis-ci.org/pytorch/vision.svg?branch=master
     :target: https://travis-ci.org/pytorch/vision
@@ -19,7 +19,7 @@ The torchvision package consists of popular datasets, model architectures, and c
 Installation
 ============
 
-TorchVision requires PyTorch 1.1 or newer.
+TorchVision requires PyTorch 1.2 or newer.
 
 Anaconda:
 
@@ -41,6 +41,9 @@ From source:
     # or, for OSX
     # MACOSX_DEPLOYMENT_TARGET=10.9 CC=clang CXX=clang++ python setup.py install
 
+By default, GPU support is built if CUDA is found and ``torch.cuda.is_available()`` is true.
+It's possible to force building GPU support by setting ``FORCE_CUDA=1`` environment variable,
+which is useful when building a docker image.
 
 Image Backend
 =============
@@ -56,6 +59,20 @@ Torchvision currently supports the following image backends:
 .. _Pillow-SIMD : https://github.com/uploadcare/pillow-simd
 .. _accimage: https://github.com/pytorch/accimage
 
+C++ API
+=======
+TorchVision also offers a C++ API that contains C++ equivalent of python models. 
+
+Installation From source:
+
+.. code:: bash
+
+    mkdir build
+    cd build
+    cmake ..
+    make 
+    make install
+
 Documentation
 =============
 You can find the API documentation on the pytorch website: http://pytorch.org/docs/master/torchvision/
@@ -63,3 +80,10 @@ You can find the API documentation on the pytorch website: http://pytorch.org/do
 Contributing
 ============
 We appreciate all contributions. If you are planning to contribute back bug-fixes, please do so without any further discussion. If you plan to contribute new features, utility functions or extensions, please first open an issue and discuss the feature with us.
+
+Disclaimer on Datasets
+======================
+
+This is a utility library that downloads and prepares public datasets. We do not host or distribute these datasets, vouch for their quality or fairness, or claim that you have license to use the dataset. It is your responsibility to determine whether you have permission to use the dataset under the dataset's license.
+
+If you're a dataset owner and wish to update any part of it (description, citation, etc.), or do not want your dataset to be included in this library, please get in touch through a GitHub issue. Thanks for your contribution to the ML community!

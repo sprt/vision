@@ -4,8 +4,29 @@ import torch.nn.functional as F
 from torch import nn
 import torch_xla
 
+import torchvision
 from torchvision.ops import roi_align
 from torchvision.ops.boxes import box_area
+
+
+# copying result_idx_in_level to a specific index in result[]
+# is not supported by ONNX tracing yet.
+# _onnx_merge_levels() is an implementation supported by ONNX
+# that merges the levels to the right indices
+def _onnx_merge_levels(levels, unmerged_results):
+    first_result = unmerged_results[0]
+    dtype, device = first_result.dtype, first_result.device
+    res = torch.zeros((levels.size(0), first_result.size(1),
+                       first_result.size(2), first_result.size(3)),
+                      dtype=dtype, device=device)
+    for l in range(len(unmerged_results)):
+        index = (levels == l).nonzero().view(-1, 1, 1, 1)
+        index = index.expand(index.size(0),
+                             unmerged_results[l].size(1),
+                             unmerged_results[l].size(2),
+                             unmerged_results[l].size(3))
+        res = res.scatter(0, index, unmerged_results[l])
+    return res
 
 
 class LevelMapper(object):
@@ -36,9 +57,9 @@ class LevelMapper(object):
         s = torch.sqrt(torch.cat([box_area(boxlist) for boxlist in boxlists]))
 
         # Eqn.(1) in FPN paper
-        target_lvls = torch.floor(self.lvl0 + torch.log2(s / self.s0 + self.eps))
+        target_lvls = torch.floor(self.lvl0 + torch.log2(s / self.s0) + torch.tensor(self.eps, dtype=s.dtype))
         target_lvls = torch.clamp(target_lvls, min=self.k_min, max=self.k_max)
-        return target_lvls.to(torch.int64) - self.k_min
+        return (target_lvls.to(torch.int64) - self.k_min).to(torch.int64)
 
 
 class MultiScaleRoIAlign(nn.Module):
@@ -85,7 +106,7 @@ class MultiScaleRoIAlign(nn.Module):
         device, dtype = concat_boxes.device, concat_boxes.dtype
         ids = torch.cat(
             [
-                torch.full((len(b), 1), i, dtype=dtype, device=device)
+                torch.full_like(b[:, :1], i, dtype=dtype, device=device)
                 for i, b in enumerate(boxes)
             ],
             dim=0,
@@ -120,7 +141,7 @@ class MultiScaleRoIAlign(nn.Module):
             x (OrderedDict[Tensor]): feature maps for each level. They are assumed to have
                 all the same number of channels, but they can have different sizes.
             boxes (List[Tensor[N, 4]]): boxes to be used to perform the pooling operation, in
-                [x0, y0, x1, y1] format and in the image reference size, not the feature map
+                (x1, y1, x2, y2) format and in the image reference size, not the feature map
                 reference.
             image_shapes (List[Tuple[height, width]]): the sizes of each image before they
                 have been fed to a CNN to obtain feature maps. This allows us to infer the
@@ -154,6 +175,7 @@ class MultiScaleRoIAlign(nn.Module):
             device=device,
         )
 
+        results = []
         for level, (per_level_feature, scale) in enumerate(zip(x, self.scales)):
             #import pdb; pdb.set_trace()
 
@@ -162,22 +184,16 @@ class MultiScaleRoIAlign(nn.Module):
             idx_in_level = torch.nonzero(levels == level).squeeze(1)
             rois_per_level = rois[idx_in_level]
 
-            xla_device = per_level_feature.device
-            torch_xla._XLAC._xla_sync_multi([per_level_feature, rois_per_level], devices=[])
-
-            per_level_feature_cpu = per_level_feature.cpu().clone()
-            rois_per_level_cpu = rois_per_level.cpu().clone()
-            result[idx_in_level] = roi_align(
-                per_level_feature_cpu, rois_per_level_cpu,
+            result_idx_in_level = roi_align(
+                per_level_feature, rois_per_level,
                 output_size=self.output_size,
-                spatial_scale=scale, sampling_ratio=self.sampling_ratio
-            ).to(xla_device)
+                spatial_scale=scale, sampling_ratio=self.sampling_ratio)
 
-#            result[idx_in_level] = roi_align(
-#                per_level_feature, rois_per_level,
-#                output_size=self.output_size,
-#                spatial_scale=scale, sampling_ratio=self.sampling_ratio
-#            )
+            if torchvision._is_tracing():
+                results.append(result_idx_in_level.to(dtype))
+            else:
+                result[idx_in_level] = result_idx_in_level
 
-
+        if torchvision._is_tracing():
+            result = _onnx_merge_levels(levels, results)
         return result

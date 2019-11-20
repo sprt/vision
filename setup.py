@@ -7,11 +7,12 @@ from setuptools import setup, find_packages
 from pkg_resources import get_distribution, DistributionNotFound
 import subprocess
 import distutils.command.clean
+import distutils.spawn
 import glob
 import shutil
 
 import torch
-from torch.utils.cpp_extension import CppExtension, CUDAExtension, CUDA_HOME
+from torch.utils.cpp_extension import BuildExtension, CppExtension, CUDAExtension, CUDA_HOME
 
 
 def read(*names, **kwargs):
@@ -29,9 +30,9 @@ def get_dist(pkgname):
         return None
 
 
-version = '0.3.0'
+version = '0.5.0a0'
 sha = 'Unknown'
-package_name = os.getenv('TORCHVISION_PACKAGE_NAME', 'torchvision')
+package_name = 'torchvision'
 
 cwd = os.path.dirname(os.path.abspath(__file__))
 
@@ -40,12 +41,10 @@ try:
 except Exception:
     pass
 
-if os.getenv('TORCHVISION_BUILD_VERSION'):
-    assert os.getenv('TORCHVISION_BUILD_NUMBER') is not None
-    build_number = int(os.getenv('TORCHVISION_BUILD_NUMBER'))
-    version = os.getenv('TORCHVISION_BUILD_VERSION')
-    if build_number > 1:
-        version += '.post' + str(build_number)
+if os.getenv('BUILD_VERSION'):
+    version = os.getenv('BUILD_VERSION')
+elif sha != 'Unknown':
+    version += '+' + sha[:7]
 print("Building wheel {}-{}".format(package_name, version))
 
 
@@ -54,21 +53,23 @@ def write_version_file():
     with open(version_path, 'w') as f:
         f.write("__version__ = '{}'\n".format(version))
         f.write("git_version = {}\n".format(repr(sha)))
-        f.write("from torchvision import _C\n")
-        f.write("if hasattr(_C, 'CUDA_VERSION'):\n")
-        f.write("    cuda = _C.CUDA_VERSION\n")
+        f.write("from torchvision.extension import _check_cuda_version\n")
+        f.write("if _check_cuda_version() > 0:\n")
+        f.write("    cuda = _check_cuda_version()\n")
 
 
 write_version_file()
 
 readme = open('README.rst').read()
 
-pytorch_package_name = os.getenv('TORCHVISION_PYTORCH_DEPENDENCY_NAME', 'torch >= 1.1.0')
+pytorch_dep = 'torch'
+if os.getenv('PYTORCH_VERSION'):
+    pytorch_dep += "==" + os.getenv('PYTORCH_VERSION')
 
 requirements = [
     'numpy',
     'six',
-    pytorch_package_name,
+    pytorch_dep,
 ]
 
 pillow_ver = ' >= 4.1.1'
@@ -87,10 +88,22 @@ def get_extensions():
     sources = main_file + source_cpu
     extension = CppExtension
 
+    compile_cpp_tests = os.getenv('WITH_CPP_MODELS_TEST', '0') == '1'
+    if compile_cpp_tests:
+        test_dir = os.path.join(this_dir, 'test')
+        models_dir = os.path.join(this_dir, 'torchvision', 'csrc', 'models')
+        test_file = glob.glob(os.path.join(test_dir, '*.cpp'))
+        source_models = glob.glob(os.path.join(models_dir, '*.cpp'))
+
+        test_file = [os.path.join(test_dir, s) for s in test_file]
+        source_models = [os.path.join(models_dir, s) for s in source_models]
+        tests = test_file + source_models
+        tests_include_dirs = [test_dir, models_dir]
+
     define_macros = []
 
     extra_compile_args = {}
-    if torch.cuda.is_available() and CUDA_HOME is not None:
+    if (torch.cuda.is_available() and CUDA_HOME is not None) or os.getenv('FORCE_CUDA', '0') == '1':
         extension = CUDAExtension
         sources += source_cuda
         define_macros += [('WITH_CUDA', None)]
@@ -104,9 +117,26 @@ def get_extensions():
             'nvcc': nvcc_flags,
         }
 
+    if sys.platform == 'win32':
+        define_macros += [('torchvision_EXPORTS', None)]
+
+        extra_compile_args.setdefault('cxx', [])
+        extra_compile_args['cxx'].append('/MP')
+
     sources = [os.path.join(extensions_dir, s) for s in sources]
 
     include_dirs = [extensions_dir]
+
+    ffmpeg_exe = distutils.spawn.find_executable('ffmpeg')
+    has_ffmpeg = ffmpeg_exe is not None
+    if has_ffmpeg:
+        ffmpeg_bin = os.path.dirname(ffmpeg_exe)
+        ffmpeg_root = os.path.dirname(ffmpeg_bin)
+        ffmpeg_include_dir = os.path.join(ffmpeg_root, 'include')
+
+        # TorchVision video reader
+        video_reader_src_dir = os.path.join(this_dir, 'torchvision', 'csrc', 'cpu', 'video_reader')
+        video_reader_src = glob.glob(os.path.join(video_reader_src_dir, "*.cpp"))
 
     ext_modules = [
         extension(
@@ -117,6 +147,37 @@ def get_extensions():
             extra_compile_args=extra_compile_args,
         )
     ]
+    if compile_cpp_tests:
+        ext_modules.append(
+            extension(
+                'torchvision._C_tests',
+                tests,
+                include_dirs=tests_include_dirs,
+                define_macros=define_macros,
+                extra_compile_args=extra_compile_args,
+            )
+        )
+    if has_ffmpeg:
+        ext_modules.append(
+            CppExtension(
+                'torchvision.video_reader',
+                video_reader_src,
+                include_dirs=[
+                    video_reader_src_dir,
+                    ffmpeg_include_dir,
+                    extensions_dir,
+                ],
+                libraries=[
+                    'avcodec',
+                    'avformat',
+                    'avutil',
+                    'swresample',
+                    'swscale',
+                ],
+                extra_compile_args=["-std=c++14"],
+                extra_link_args=["-std=c++14"],
+            )
+        )
 
     return ext_modules
 
@@ -150,11 +211,14 @@ setup(
     # Package info
     packages=find_packages(exclude=('test',)),
 
-    zip_safe=True,
+    zip_safe=False,
     install_requires=requirements,
     extras_require={
         "scipy": ["scipy"],
     },
     ext_modules=get_extensions(),
-    cmdclass={'build_ext': torch.utils.cpp_extension.BuildExtension, 'clean': clean}
+    cmdclass={
+        'build_ext': BuildExtension.with_options(no_python_abi_suffix=True),
+        'clean': clean,
+    }
 )
