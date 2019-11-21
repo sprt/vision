@@ -184,10 +184,16 @@ class MultiScaleRoIAlign(nn.Module):
             idx_in_level = torch.nonzero(levels == level).squeeze(1)
             rois_per_level = rois[idx_in_level]
 
+            xla_device = per_level_feature.device
+            torch_xla._XLAC._xla_sync_multi([per_level_feature, rois_per_level], devices=[])
+
+            per_level_feature_cpu = per_level_feature.cpu().clone()
+            rois_per_level_cpu = rois_per_level.cpu().clone()
             result_idx_in_level = roi_align(
                 per_level_feature, rois_per_level,
                 output_size=self.output_size,
-                spatial_scale=scale, sampling_ratio=self.sampling_ratio)
+                spatial_scale=scale, sampling_ratio=self.sampling_ratio
+            ).to(xla_device)
 
             if torchvision._is_tracing():
                 results.append(result_idx_in_level.to(dtype))
