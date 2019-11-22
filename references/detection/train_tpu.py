@@ -133,6 +133,7 @@ def do_prediction(image_path, use_cpu=False):
     model.eval()
 
     image = Image.open(image_path)
+    image = torchvision.transforms.functional.resize(image, (800, 600))
     image_tensor = torchvision.transforms.functional.to_tensor(image)
 
     if not use_cpu:
