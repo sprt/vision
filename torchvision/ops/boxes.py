@@ -2,7 +2,7 @@ import torch
 import torch_xla
 
 
-def nms(boxes, scores, iou_threshold):
+def nms(boxes, scores, iou_threshold, post_nms_top_n):
     """
     Performs non-maximum suppression (NMS) on the boxes according
     to their intersection-over-union (IoU).
@@ -38,7 +38,7 @@ def nms(boxes, scores, iou_threshold):
     return keep
 
 
-def batched_nms(boxes, scores, idxs, iou_threshold):
+def batched_nms(boxes, scores, idxs, iou_threshold, post_nms_top_n):
     """
     Performs non-maximum suppression in a batched fashion.
 
@@ -74,7 +74,7 @@ def batched_nms(boxes, scores, idxs, iou_threshold):
     max_coordinate = boxes.max()
     offsets = idxs.to(boxes) * (max_coordinate + 1)
     boxes_for_nms = boxes + offsets[:, None]
-    keep = nms(boxes_for_nms, scores, iou_threshold)
+    keep = nms(boxes_for_nms, scores, iou_threshold, post_nms_top_n)
     print("ops/boxes.py; keep.shape: {}".format(keep.shape))
     return keep
 

@@ -4,11 +4,15 @@ template <typename scalar_t>
 at::Tensor nms_cpu_kernel(
     const at::Tensor& dets,
     const at::Tensor& scores,
-    const float iou_threshold) {
+    const double iou_threshold,
+    const long post_nms_top_n) {
   AT_ASSERTM(!dets.type().is_cuda(), "dets must be a CPU tensor");
   AT_ASSERTM(!scores.type().is_cuda(), "scores must be a CPU tensor");
   AT_ASSERTM(
       dets.type() == scores.type(), "dets should have the same type as scores");
+  AT_ASSERTM(
+      dets.size(0) >= post_nms_top_n,
+      "should have at least post_nms_top_n boxes");
 
   if (dets.numel() == 0)
     return at::empty({0}, dets.options().dtype(at::kLong));
@@ -41,7 +45,11 @@ at::Tensor nms_cpu_kernel(
     auto i = order[_i];
     if (suppressed[i] == 1)
       continue;
+
     keep[num_to_keep++] = i;
+    if (num_to_keep == post_nms_top_n)
+      goto end;
+
     auto ix1 = x1[i];
     auto iy1 = y1[i];
     auto ix2 = x2[i];
@@ -65,17 +73,20 @@ at::Tensor nms_cpu_kernel(
         suppressed[j] = 1;
     }
   }
-  return keep_t.narrow(/*dim=*/0, /*start=*/0, /*length=*/num_to_keep);
+
+end:
+  return keep_t.narrow(/*dim=*/0, /*start=*/0, /*length=*/post_nms_top_n);
 }
 
 at::Tensor nms_cpu(
     const at::Tensor& dets,
     const at::Tensor& scores,
-    const float iou_threshold) {
+    const double iou_threshold,
+    const long post_nms_top_n) {
   auto result = at::empty({0}, dets.options());
 
   AT_DISPATCH_FLOATING_TYPES(dets.type(), "nms", [&] {
-    result = nms_cpu_kernel<scalar_t>(dets, scores, iou_threshold);
+    result = nms_cpu_kernel<scalar_t>(dets, scores, iou_threshold, post_nms_top_n);
   });
   return result;
 }
