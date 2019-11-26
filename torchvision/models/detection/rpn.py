@@ -60,7 +60,7 @@ class AnchorGenerator(nn.Module):
         self.sizes = sizes
         self.aspect_ratios = aspect_ratios
         self.cell_anchors = None
-        self._cache = {}
+        # self._cache = {}
 
     @staticmethod
     def generate_anchors(scales, aspect_ratios, dtype=torch.float32, device="cpu"):
@@ -76,8 +76,8 @@ class AnchorGenerator(nn.Module):
         return base_anchors.round()
 
     def set_cell_anchors(self, dtype, device):
-        if self.cell_anchors is not None:
-            return self.cell_anchors
+        # if self.cell_anchors is not None:
+            # return self.cell_anchors
         cell_anchors = [
             self.generate_anchors(
                 sizes,
@@ -123,10 +123,10 @@ class AnchorGenerator(nn.Module):
 
     def cached_grid_anchors(self, grid_sizes, strides):
         key = tuple(grid_sizes) + tuple(strides)
-        if key in self._cache:
-            return self._cache[key]
+        # if key in self._cache:
+            # return self._cache[key]
         anchors = self.grid_anchors(grid_sizes, strides)
-        self._cache[key] = anchors
+        # self._cache[key] = anchors
         return anchors
 
     def forward(self, image_list, feature_maps):
