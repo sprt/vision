@@ -1,4 +1,5 @@
 import torch
+import torchvision
 
 import torch.nn.functional as F
 from torch import nn
@@ -17,6 +18,8 @@ def fastrcnn_loss(class_logits, box_regression, labels, regression_targets):
     Arguments:
         class_logits (Tensor)
         box_regression (Tensor)
+        labels (list[BoxList])
+        regression_targets (Tensor)
 
     Returns:
         classification_loss (Tensor)
@@ -55,7 +58,7 @@ def maskrcnn_inference(x, labels):
 
     Arguments:
         x (Tensor): the mask logits
-        boxes (list[BoxList]): bounding boxes that are used as
+        labels (list[BoxList]): bounding boxes that are used as
             reference, one for ech image
 
     Returns:
@@ -71,7 +74,11 @@ def maskrcnn_inference(x, labels):
     index = torch.arange(num_masks, device=labels.device)
     mask_prob = mask_prob[index, labels][:, None]
 
-    mask_prob = mask_prob.split(boxes_per_image, dim=0)
+    if len(boxes_per_image) == 1:
+        # TODO : remove when dynamic split supported in ONNX
+        mask_prob = (mask_prob,)
+    else:
+        mask_prob = mask_prob.split(boxes_per_image, dim=0)
 
     return mask_prob
 
@@ -248,10 +255,29 @@ def keypointrcnn_inference(x, boxes):
     return kp_probs, kp_scores
 
 
+def _onnx_expand_boxes(boxes, scale):
+    w_half = (boxes[:, 2] - boxes[:, 0]) * .5
+    h_half = (boxes[:, 3] - boxes[:, 1]) * .5
+    x_c = (boxes[:, 2] + boxes[:, 0]) * .5
+    y_c = (boxes[:, 3] + boxes[:, 1]) * .5
+
+    w_half = w_half.to(dtype=torch.float32) * scale
+    h_half = h_half.to(dtype=torch.float32) * scale
+
+    boxes_exp0 = x_c - w_half
+    boxes_exp1 = y_c - h_half
+    boxes_exp2 = x_c + w_half
+    boxes_exp3 = y_c + h_half
+    boxes_exp = torch.stack((boxes_exp0, boxes_exp1, boxes_exp2, boxes_exp3), 1)
+    return boxes_exp
+
+
 # the next two functions should be merged inside Masker
 # but are kept here for the moment while we need them
-# temporarily gor paste_mask_in_image
+# temporarily for paste_mask_in_image
 def expand_boxes(boxes, scale):
+    if torchvision._is_tracing():
+        return _onnx_expand_boxes(boxes, scale)
     w_half = (boxes[:, 2] - boxes[:, 0]) * .5
     h_half = (boxes[:, 3] - boxes[:, 1]) * .5
     x_c = (boxes[:, 2] + boxes[:, 0]) * .5
@@ -270,10 +296,10 @@ def expand_boxes(boxes, scale):
 
 def expand_masks(mask, padding):
     M = mask.shape[-1]
-    scale = float(M + 2 * padding) / M
-    
-    # no clue as repro passes fine
-    # Need this line as without it masks are not accurate.
+    if torchvision._is_tracing():
+        scale = (M + 2 * padding).to(torch.float32) / M.to(torch.float32)
+    else:
+        scale = float(M + 2 * padding) / M
     padded_mask = torch.nn.functional.pad(mask, (padding,) * 4)
 #    padded_mask = mask  # temporary hack
 
@@ -308,11 +334,69 @@ def paste_mask_in_image(mask, box, im_h, im_w):
     return im_mask
 
 
+def _onnx_paste_mask_in_image(mask, box, im_h, im_w):
+    one = torch.ones(1, dtype=torch.int64)
+    zero = torch.zeros(1, dtype=torch.int64)
+
+    w = (box[2] - box[0] + one)
+    h = (box[3] - box[1] + one)
+    w = torch.max(torch.cat((w, one)))
+    h = torch.max(torch.cat((h, one)))
+
+    # Set shape to [batchxCxHxW]
+    mask = mask.expand((1, 1, mask.size(0), mask.size(1)))
+
+    # Resize mask
+    mask = torch.nn.functional.interpolate(mask, size=(int(h), int(w)), mode='bilinear', align_corners=False)
+    mask = mask[0][0]
+
+    x_0 = torch.max(torch.cat((box[0].unsqueeze(0), zero)))
+    x_1 = torch.min(torch.cat((box[2].unsqueeze(0) + one, im_w.unsqueeze(0))))
+    y_0 = torch.max(torch.cat((box[1].unsqueeze(0), zero)))
+    y_1 = torch.min(torch.cat((box[3].unsqueeze(0) + one, im_h.unsqueeze(0))))
+
+    unpaded_im_mask = mask[(y_0 - box[1]):(y_1 - box[1]),
+                           (x_0 - box[0]):(x_1 - box[0])]
+
+    # TODO : replace below with a dynamic padding when support is added in ONNX
+
+    # pad y
+    zeros_y0 = torch.zeros(y_0, unpaded_im_mask.size(1))
+    zeros_y1 = torch.zeros(im_h - y_1, unpaded_im_mask.size(1))
+    concat_0 = torch.cat((zeros_y0,
+                          unpaded_im_mask.to(dtype=torch.float32),
+                          zeros_y1), 0)[0:im_h, :]
+    # pad x
+    zeros_x0 = torch.zeros(concat_0.size(0), x_0)
+    zeros_x1 = torch.zeros(concat_0.size(0), im_w - x_1)
+    im_mask = torch.cat((zeros_x0,
+                         concat_0,
+                         zeros_x1), 1)[:, :im_w]
+    return im_mask
+
+
+@torch.jit.script
+def _onnx_paste_masks_in_image_loop(masks, boxes, im_h, im_w):
+    res_append = torch.zeros(0, im_h, im_w)
+    for i in range(masks.size(0)):
+        mask_res = _onnx_paste_mask_in_image(masks[i][0], boxes[i], im_h, im_w)
+        mask_res = mask_res.unsqueeze(0)
+        res_append = torch.cat((res_append, mask_res))
+    return res_append
+
+
 def paste_masks_in_image(masks, boxes, img_shape, padding=1):
     masks, scale = expand_masks(masks, padding=padding)
-    boxes = expand_boxes(boxes, scale).to(dtype=torch.int64).tolist()
+    boxes = expand_boxes(boxes, scale).to(dtype=torch.int64)
     # im_h, im_w = img_shape.tolist()
     im_h, im_w = img_shape
+
+    if torchvision._is_tracing():
+        return _onnx_paste_masks_in_image_loop(masks, boxes,
+                                               torch.scalar_tensor(im_h, dtype=torch.int64),
+                                               torch.scalar_tensor(im_w, dtype=torch.int64))[:, None]
+
+    boxes = boxes.tolist()
     res = [
         paste_mask_in_image(m[0], b, im_h, im_w)
         for m, b in zip(masks, boxes)
@@ -449,7 +533,8 @@ class RoIHeads(torch.nn.Module):
 
     def select_training_samples(self, proposals, targets):
         self.check_targets(targets)
-        gt_boxes = [t["boxes"] for t in targets]
+        dtype = proposals[0].dtype
+        gt_boxes = [t["boxes"].to(dtype) for t in targets]
         gt_labels = [t["labels"] for t in targets]
 
         # append ground-truth bboxes to propos
@@ -481,8 +566,13 @@ class RoIHeads(torch.nn.Module):
         pred_scores = F.softmax(class_logits, -1)
 
         # split boxes and scores per image
-        pred_boxes = pred_boxes.split(boxes_per_image, 0)
-        pred_scores = pred_scores.split(boxes_per_image, 0)
+        if len(boxes_per_image) == 1:
+            # TODO : remove this when ONNX support dynamic split sizes
+            pred_boxes = (pred_boxes,)
+            pred_scores = (pred_scores,)
+        else:
+            pred_boxes = pred_boxes.split(boxes_per_image, 0)
+            pred_scores = pred_scores.split(boxes_per_image, 0)
 
         all_boxes = []
         all_scores = []
@@ -501,12 +591,16 @@ class RoIHeads(torch.nn.Module):
 
             # batch everything, by making every class prediction be a separate instance
             boxes = boxes.reshape(-1, 4)
-            scores = scores.flatten()
-            labels = labels.flatten()
+            scores = scores.reshape(-1)
+            labels = labels.reshape(-1)
 
             # remove low scoring boxes
             inds = torch.nonzero(scores > self.score_thresh).squeeze(1)
             boxes, scores, labels = boxes[inds], scores[inds], labels[inds]
+
+            # remove empty boxes
+            keep = box_ops.remove_small_boxes(boxes, min_size=1e-2)
+            boxes, scores, labels = boxes[keep], scores[keep], labels[keep]
 
             # non-maximum suppression, independently done per class
             keep = box_ops.batched_nms(boxes, scores, labels, self.nms_thresh)
@@ -530,6 +624,13 @@ class RoIHeads(torch.nn.Module):
             image_shapes (List[Tuple[H, W]])
             targets (List[Dict])
         """
+        if targets is not None:
+            for t in targets:
+                assert t["boxes"].dtype.is_floating_point, 'target boxes must of float type'
+                assert t["labels"].dtype == torch.int64, 'target labels must of int64 type'
+                if self.has_keypoint:
+                    assert t["keypoints"].dtype == torch.float32, 'target keypoints must of float type'
+
         if self.training:
             proposals, matched_idxs, labels, regression_targets = self.select_training_samples(proposals, targets)
 

@@ -3,10 +3,12 @@ from PIL import Image
 import os
 import os.path
 import numpy as np
-from .cifar import CIFAR10
+
+from .vision import VisionDataset
+from .utils import check_integrity, download_and_extract_archive, verify_str_arg
 
 
-class STL10(CIFAR10):
+class STL10(VisionDataset):
     """`STL10 <https://cs.stanford.edu/~acoates/stl10/>`_ Dataset.
 
     Args:
@@ -14,6 +16,9 @@ class STL10(CIFAR10):
             ``stl10_binary`` exists.
         split (string): One of {'train', 'test', 'unlabeled', 'train+unlabeled'}.
             Accordingly dataset is selected.
+        folds (int, optional): One of {0-9} or None.
+            For training, loads one of the 10 pre-defined folds of 1k samples for the
+             standard evaluation procedure. If no value is passed, loads the 5k samples.
         transform (callable, optional): A function/transform that  takes in an PIL image
             and returns a transformed version. E.g, ``transforms.RandomCrop``
         target_transform (callable, optional): A function/transform that takes in the
@@ -28,6 +33,7 @@ class STL10(CIFAR10):
     filename = "stl10_binary.tar.gz"
     tgz_md5 = '91f7769df0f17e558f3565bffb0c7dfb'
     class_names_file = 'class_names.txt'
+    folds_list_file = 'fold_indices.txt'
     train_list = [
         ['train_X.bin', '918c2871b30a85fa023e0c44e0bee87f'],
         ['train_y.bin', '5a34089d4802c674881badbb80307741'],
@@ -40,16 +46,12 @@ class STL10(CIFAR10):
     ]
     splits = ('train', 'train+unlabeled', 'unlabeled', 'test')
 
-    def __init__(self, root, split='train',
-                 transform=None, target_transform=None, download=False):
-        if split not in self.splits:
-            raise ValueError('Split "{}" not found. Valid splits are: {}'.format(
-                split, ', '.join(self.splits),
-            ))
-        self.root = os.path.expanduser(root)
-        self.transform = transform
-        self.target_transform = target_transform
-        self.split = split  # train/test/unlabeled set
+    def __init__(self, root, split='train', folds=None, transform=None,
+                 target_transform=None, download=False):
+        super(STL10, self).__init__(root, transform=transform,
+                                    target_transform=target_transform)
+        self.split = verify_str_arg(split, "split", self.splits)
+        self.folds = self._verify_folds(folds)
 
         if download:
             self.download()
@@ -63,9 +65,12 @@ class STL10(CIFAR10):
         if self.split == 'train':
             self.data, self.labels = self.__loadfile(
                 self.train_list[0][0], self.train_list[1][0])
+            self.__load_folds(folds)
+
         elif self.split == 'train+unlabeled':
             self.data, self.labels = self.__loadfile(
                 self.train_list[0][0], self.train_list[1][0])
+            self.__load_folds(folds)
             unlabeled_data, _ = self.__loadfile(self.train_list[2][0])
             self.data = np.concatenate((self.data, unlabeled_data))
             self.labels = np.concatenate(
@@ -83,6 +88,19 @@ class STL10(CIFAR10):
         if os.path.isfile(class_file):
             with open(class_file) as f:
                 self.classes = f.read().splitlines()
+
+    def _verify_folds(self, folds):
+        if folds is None:
+            return folds
+        elif isinstance(folds, int):
+            if folds in range(10):
+                return folds
+            msg = ("Value for argument folds should be in the range [0, 10), "
+                   "but got {}.")
+            raise ValueError(msg.format(folds))
+        else:
+            msg = "Expected type None or int for argument folds, but got type {}."
+            raise ValueError(msg.format(type(folds)))
 
     def __getitem__(self, index):
         """
@@ -129,5 +147,31 @@ class STL10(CIFAR10):
 
         return images, labels
 
+    def _check_integrity(self):
+        root = self.root
+        for fentry in (self.train_list + self.test_list):
+            filename, md5 = fentry[0], fentry[1]
+            fpath = os.path.join(root, self.base_folder, filename)
+            if not check_integrity(fpath, md5):
+                return False
+        return True
+
+    def download(self):
+        if self._check_integrity():
+            print('Files already downloaded and verified')
+            return
+        download_and_extract_archive(self.url, self.root, filename=self.filename, md5=self.tgz_md5)
+
     def extra_repr(self):
         return "Split: {split}".format(**self.__dict__)
+
+    def __load_folds(self, folds):
+        # loads one of the folds if specified
+        if folds is None:
+            return
+        path_to_folds = os.path.join(
+            self.root, self.base_folder, self.folds_list_file)
+        with open(path_to_folds, 'r') as f:
+            str_idx = f.read().splitlines()[folds]
+            list_idx = np.fromstring(str_idx, dtype=np.uint8, sep=' ')
+            self.data, self.labels = self.data[list_idx, :, :, :], self.labels[list_idx]

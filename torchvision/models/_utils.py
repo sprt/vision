@@ -2,6 +2,7 @@ from collections import OrderedDict
 
 import torch
 from torch import nn
+from torch.jit.annotations import Dict
 
 
 class IntermediateLayerGetter(nn.ModuleDict):
@@ -35,10 +36,15 @@ class IntermediateLayerGetter(nn.ModuleDict):
         >>>     [('feat1', torch.Size([1, 64, 56, 56])),
         >>>      ('feat2', torch.Size([1, 256, 14, 14]))]
     """
+    _version = 2
+    __constants__ = ['layers']
+    __annotations__ = {
+        "return_layers": Dict[str, str],
+    }
+
     def __init__(self, model, return_layers):
         if not set(return_layers).issubset([name for name, _ in model.named_children()]):
             raise ValueError("return_layers are not present in model")
-
         orig_return_layers = return_layers
         return_layers = {k: v for k, v in return_layers.items()}
         layers = OrderedDict()
@@ -54,7 +60,7 @@ class IntermediateLayerGetter(nn.ModuleDict):
 
     def forward(self, x):
         out = OrderedDict()
-        for name, module in self.named_children():
+        for name, module in self.items():
             x = module(x)
             if name in self.return_layers:
                 out_name = self.return_layers[name]

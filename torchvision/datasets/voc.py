@@ -10,7 +10,7 @@ else:
     import xml.etree.ElementTree as ET
 
 from PIL import Image
-from .utils import download_url, check_integrity
+from .utils import download_url, check_integrity, verify_str_arg
 
 DATASET_YEAR_DICT = {
     '2012': {
@@ -66,6 +66,8 @@ class VOCSegmentation(VisionDataset):
             and returns a transformed version. E.g, ``transforms.RandomCrop``
         target_transform (callable, optional): A function/transform that takes in the
             target and transforms it.
+        transforms (callable, optional): A function/transform that takes input sample and its target as entry
+            and returns a transformed version.
     """
 
     def __init__(self,
@@ -81,7 +83,10 @@ class VOCSegmentation(VisionDataset):
         self.url = DATASET_YEAR_DICT[year]['url']
         self.filename = DATASET_YEAR_DICT[year]['filename']
         self.md5 = DATASET_YEAR_DICT[year]['md5']
-        self.image_set = image_set
+        valid_sets = ["train", "trainval", "val"]
+        if year == "2007":
+            valid_sets.append("test")
+        self.image_set = verify_str_arg(image_set, "image_set", valid_sets)
         base_dir = DATASET_YEAR_DICT[year]['base_dir']
         voc_root = os.path.join(self.root, base_dir)
         image_dir = os.path.join(voc_root, 'JPEGImages')
@@ -97,11 +102,6 @@ class VOCSegmentation(VisionDataset):
         splits_dir = os.path.join(voc_root, 'ImageSets/Segmentation')
 
         split_f = os.path.join(splits_dir, image_set.rstrip('\n') + '.txt')
-
-        if not os.path.exists(split_f):
-            raise ValueError(
-                'Wrong image_set entered! Please use image_set="train" '
-                'or image_set="trainval" or image_set="val"')
 
         with open(os.path.join(split_f), "r") as f:
             file_names = [x.strip() for x in f.readlines()]
@@ -145,6 +145,8 @@ class VOCDetection(VisionDataset):
             and returns a transformed version. E.g, ``transforms.RandomCrop``
         target_transform (callable, required): A function/transform that takes in the
             target and transforms it.
+        transforms (callable, optional): A function/transform that takes input sample and its target as entry
+            and returns a transformed version.
     """
 
     def __init__(self,
@@ -160,7 +162,10 @@ class VOCDetection(VisionDataset):
         self.url = DATASET_YEAR_DICT[year]['url']
         self.filename = DATASET_YEAR_DICT[year]['filename']
         self.md5 = DATASET_YEAR_DICT[year]['md5']
-        self.image_set = image_set
+        valid_sets = ["train", "trainval", "val"]
+        if year == "2007":
+            valid_sets.append("test")
+        self.image_set = verify_str_arg(image_set, "image_set", valid_sets)
 
         base_dir = DATASET_YEAR_DICT[year]['base_dir']
         voc_root = os.path.join(self.root, base_dir)
@@ -177,12 +182,6 @@ class VOCDetection(VisionDataset):
         splits_dir = os.path.join(voc_root, 'ImageSets/Main')
 
         split_f = os.path.join(splits_dir, image_set.rstrip('\n') + '.txt')
-
-        if not os.path.exists(split_f):
-            raise ValueError(
-                'Wrong image_set entered! Please use image_set="train" '
-                'or image_set="trainval" or image_set="val" or a valid'
-                'image_set from the VOC ImageSets/Main folder.')
 
         with open(os.path.join(split_f), "r") as f:
             file_names = [x.strip() for x in f.readlines()]

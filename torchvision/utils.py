@@ -11,16 +11,16 @@ def make_grid(tensor, nrow=8, padding=2,
         tensor (Tensor or list): 4D mini-batch Tensor of shape (B x C x H x W)
             or a list of images all of the same size.
         nrow (int, optional): Number of images displayed in each row of the grid.
-            The Final grid size is (B / nrow, nrow). Default is 8.
-        padding (int, optional): amount of padding. Default is 2.
+            The final grid size is ``(B / nrow, nrow)``. Default: ``8``.
+        padding (int, optional): amount of padding. Default: ``2``.
         normalize (bool, optional): If True, shift the image to the range (0, 1),
-            by subtracting the minimum and dividing by the maximum pixel value.
+            by the min and max values specified by :attr:`range`. Default: ``False``.
         range (tuple, optional): tuple (min, max) where min and max are numbers,
             then these numbers are used to normalize the image. By default, min and max
             are computed from the tensor.
-        scale_each (bool, optional): If True, scale each image in the batch of
-            images separately rather than the (min, max) over all images.
-        pad_value (float, optional): Value for the padded pixels.
+        scale_each (bool, optional): If ``True``, scale each image in the batch of
+            images separately rather than the (min, max) over all images. Default: ``False``.
+        pad_value (float, optional): Value for the padded pixels. Default: ``0``.
 
     Example:
         See this notebook `here <https://gist.github.com/anonymous/bf16430f7750c023141c562f3e9f2a91>`_
@@ -67,14 +67,15 @@ def make_grid(tensor, nrow=8, padding=2,
             norm_range(tensor, range)
 
     if tensor.size(0) == 1:
-        return tensor.squeeze()
+        return tensor.squeeze(0)
 
     # make the mini-batch of images into a grid
     nmaps = tensor.size(0)
     xmaps = min(nrow, nmaps)
     ymaps = int(math.ceil(float(nmaps) / xmaps))
     height, width = int(tensor.size(2) + padding), int(tensor.size(3) + padding)
-    grid = tensor.new_full((3, height * ymaps + padding, width * xmaps + padding), pad_value)
+    num_channels = tensor.size(1)
+    grid = tensor.new_full((num_channels, height * ymaps + padding, width * xmaps + padding), pad_value)
     k = 0
     for y in irange(ymaps):
         for x in irange(xmaps):
@@ -87,19 +88,22 @@ def make_grid(tensor, nrow=8, padding=2,
     return grid
 
 
-def save_image(tensor, filename, nrow=8, padding=2,
-               normalize=False, range=None, scale_each=False, pad_value=0):
+def save_image(tensor, fp, nrow=8, padding=2,
+               normalize=False, range=None, scale_each=False, pad_value=0, format=None):
     """Save a given Tensor into an image file.
 
     Args:
         tensor (Tensor or list): Image to be saved. If given a mini-batch tensor,
             saves the tensor as a grid of images by calling ``make_grid``.
+        fp - A filename(string) or file object
+        format(Optional):  If omitted, the format to use is determined from the filename extension.
+            If a file object was used instead of a filename, this parameter should always be used.
         **kwargs: Other arguments are documented in ``make_grid``.
     """
     from PIL import Image
     grid = make_grid(tensor, nrow=nrow, padding=padding, pad_value=pad_value,
                      normalize=normalize, range=range, scale_each=scale_each)
     # Add 0.5 after unnormalizing to [0, 255] to round to nearest integer
-    ndarr = grid.mul_(255).add_(0.5).clamp_(0, 255).permute(1, 2, 0).to('cpu', torch.uint8).numpy()
+    ndarr = grid.mul(255).add_(0.5).clamp_(0, 255).permute(1, 2, 0).to('cpu', torch.uint8).numpy()
     im = Image.fromarray(ndarr)
-    im.save(filename)
+    im.save(fp, format=format)

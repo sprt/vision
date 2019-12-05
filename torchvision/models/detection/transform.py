@@ -2,6 +2,7 @@ import random
 import math
 import torch
 from torch import nn
+import torchvision
 
 from torchvision.ops import misc as misc_nn_ops
 from .image_list import ImageList
@@ -30,6 +31,7 @@ class GeneralizedRCNNTransform(nn.Module):
         self.image_std = image_std
 
     def forward(self, images, targets=None):
+        images = [img for img in images]
         for i in range(len(images)):
             image = images[i]
             target = targets[i] if targets is not None else targets
@@ -41,6 +43,7 @@ class GeneralizedRCNNTransform(nn.Module):
             images[i] = image
             if targets is not None:
                 targets[i] = target
+
         image_sizes = [img.shape[-2:] for img in images]
         images = self.batch_images(images)
         image_list = ImageList(images, image_sizes)
@@ -54,8 +57,9 @@ class GeneralizedRCNNTransform(nn.Module):
 
     def resize(self, image, target):
         h, w = image.shape[-2:]
-        min_size = float(min(image.shape[-2:]))
-        max_size = float(max(image.shape[-2:]))
+        im_shape = torch.tensor(image.shape[-2:])
+        min_size = float(torch.min(im_shape))
+        max_size = float(torch.max(im_shape))
         if self.training:
             size = random.choice(self.min_size)
         else:
@@ -85,14 +89,40 @@ class GeneralizedRCNNTransform(nn.Module):
             target["keypoints"] = keypoints
         return image, target
 
-    def batch_images(self, images, size_divisible=32):
-        # concatenate
-        max_size = tuple(max(s) for s in zip(*[img.shape for img in images]))
+    # _onnx_batch_images() is an implementation of
+    # batch_images() that is supported by ONNX tracing.
+    def _onnx_batch_images(self, images, size_divisible=32):
+        max_size = []
+        for i in range(images[0].dim()):
+            max_size_i = torch.max(torch.stack([img.shape[i] for img in images]).to(torch.float32)).to(torch.int64)
+            max_size.append(max_size_i)
+        stride = size_divisible
+        max_size[1] = (torch.ceil((max_size[1].to(torch.float32)) / stride) * stride).to(torch.int64)
+        max_size[2] = (torch.ceil((max_size[2].to(torch.float32)) / stride) * stride).to(torch.int64)
+        max_size = tuple(max_size)
 
+        # work around for
+        # pad_img[: img.shape[0], : img.shape[1], : img.shape[2]].copy_(img)
+        # which is not yet supported in onnx
+        padded_imgs = []
+        for img in images:
+            padding = [(s1 - s2) for s1, s2 in zip(max_size, tuple(img.shape))]
+            padded_img = torch.nn.functional.pad(img, (0, padding[2], 0, padding[1], 0, padding[0]))
+            padded_imgs.append(padded_img)
+
+        return torch.stack(padded_imgs)
+
+    def batch_images(self, images, size_divisible=32):
+        if torchvision._is_tracing():
+            # batch_images() does not export well to ONNX
+            # call _onnx_batch_images() instead
+            return self._onnx_batch_images(images, size_divisible)
+
+        max_size = tuple(max(s) for s in zip(*[img.shape for img in images]))
         stride = size_divisible
         max_size = list(max_size)
-        max_size[1] = int(math.ceil(max_size[1] / stride) * stride)
-        max_size[2] = int(math.ceil(max_size[2] / stride) * stride)
+        max_size[1] = int(math.ceil(float(max_size[1]) / stride) * stride)
+        max_size[2] = int(math.ceil(float(max_size[2]) / stride) * stride)
         max_size = tuple(max_size)
 
         batch_shape = (len(images),) + max_size
@@ -133,6 +163,7 @@ def resize_boxes(boxes, original_size, new_size):
     ratios = tuple(float(s) / float(s_orig) for s, s_orig in zip(new_size, original_size))
     ratio_height, ratio_width = ratios
     xmin, ymin, xmax, ymax = boxes.unbind(1)
+
     xmin = xmin * ratio_width
     xmax = xmax * ratio_width
     ymin = ymin * ratio_height
