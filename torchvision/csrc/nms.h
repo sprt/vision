@@ -8,7 +8,8 @@
 at::Tensor nms(
     const at::Tensor& dets,
     const at::Tensor& scores,
-    const double iou_threshold) {
+    const double iou_threshold,
+    const long post_nms_top_n) {
   if (dets.device().is_cuda()) {
 #ifdef WITH_CUDA
     if (dets.numel() == 0) {
@@ -21,6 +22,6 @@ at::Tensor nms(
 #endif
   }
 
-  at::Tensor result = nms_cpu(dets, scores, iou_threshold);
+  at::Tensor result = nms_cpu(dets, scores, iou_threshold, post_nms_top_n);
   return result;
 }

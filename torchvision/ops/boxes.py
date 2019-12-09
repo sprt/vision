@@ -1,7 +1,8 @@
 import torch
+import torch_xla
 
 
-def nms(boxes, scores, iou_threshold):
+def nms(boxes, scores, iou_threshold, post_nms_top_n):
     """
     Performs non-maximum suppression (NMS) on the boxes according
     to their intersection-over-union (IoU).
@@ -28,10 +29,16 @@ def nms(boxes, scores, iou_threshold):
         of the elements that have been kept
         by NMS, sorted in decreasing order of scores
     """
-    return torch.ops.torchvision.nms(boxes, scores, iou_threshold)
+    device = boxes.device
+    torch_xla._XLAC._xla_sync_multi([boxes, scores], devices=[])
+    boxes_cpu = boxes.cpu().clone()
+    scores_cpu = scores.cpu().clone()
+    keep = torch.ops.torchvision.nms(boxes_cpu, scores_cpu, iou_threshold)
+    keep = keep.to(device=device)
+    return keep
 
 
-def batched_nms(boxes, scores, idxs, iou_threshold):
+def batched_nms(boxes, scores, idxs, iou_threshold, post_nms_top_n):
     """
     Performs non-maximum suppression in a batched fashion.
 
@@ -67,7 +74,7 @@ def batched_nms(boxes, scores, idxs, iou_threshold):
     max_coordinate = boxes.max()
     offsets = idxs.to(boxes) * (max_coordinate + 1)
     boxes_for_nms = boxes + offsets[:, None]
-    keep = nms(boxes_for_nms, scores, iou_threshold)
+    keep = nms(boxes_for_nms, scores, iou_threshold, post_nms_top_n)
     print("ops/boxes.py; keep.shape: {}".format(keep.shape))
     return keep
 

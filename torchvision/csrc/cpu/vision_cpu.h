@@ -83,4 +83,5 @@ at::Tensor PSROIAlign_backward_cpu(
 at::Tensor nms_cpu(
     const at::Tensor& dets,
     const at::Tensor& scores,
-    const float iou_threshold);
+    const double iou_threshold,
+    const long post_nms_top_n);
