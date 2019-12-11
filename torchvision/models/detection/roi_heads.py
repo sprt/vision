@@ -603,10 +603,6 @@ class RoIHeads(torch.nn.Module):
             scores = torch.where(score_mask, scores, torch.tensor(0.0, device=device))
             labels = torch.where(score_mask, labels, torch.tensor(-1, device=device))
 
-            # remove empty boxes
-            keep = box_ops.remove_small_boxes(boxes, min_size=1e-2)
-            boxes, scores, labels = boxes[keep], scores[keep], labels[keep]
-
             # non-maximum suppression, independently done per class
             keep = box_ops.batched_nms(boxes, scores, labels, self.nms_thresh, self.detections_per_img)
 
