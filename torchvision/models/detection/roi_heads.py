@@ -595,8 +595,13 @@ class RoIHeads(torch.nn.Module):
             labels = labels.reshape(-1)
 
             # remove low scoring boxes
-            inds = torch.nonzero(scores > self.score_thresh).squeeze(1)
-            boxes, scores, labels = boxes[inds], scores[inds], labels[inds]
+            score_mask = (scores > self.score_thresh)
+            score_mask_boxes = score_mask.reshape(boxes.shape[0], -1)
+            nan_boxes = torch.full((1, boxes.shape[1],), float('nan'), device=device)
+            boxes = torch.where(score_mask_boxes, boxes, nan_boxes)
+            # pad with zeros so that nms will consider those boxes last
+            scores = torch.where(score_mask, scores, torch.tensor(0.0, device=device))
+            labels = torch.where(score_mask, labels, torch.tensor(-1, device=device))
 
             # remove empty boxes
             keep = box_ops.remove_small_boxes(boxes, min_size=1e-2)
