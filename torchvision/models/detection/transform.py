@@ -2,6 +2,7 @@ import random
 import math
 import torch
 from torch import nn
+import torch_xla.core.xla_model as xm
 import torchvision
 
 from torchvision.ops import misc as misc_nn_ops
@@ -21,7 +22,7 @@ class GeneralizedRCNNTransform(nn.Module):
     It returns a ImageList for the inputs, and a List[Dict[Tensor]] for the targets
     """
 
-    def __init__(self, min_size, max_size, image_mean, image_std):
+    def __init__(self, min_size, max_size, image_mean, image_std, is_xla=False):
         super(GeneralizedRCNNTransform, self).__init__()
         if not isinstance(min_size, (list, tuple)):
             min_size = (min_size,)
@@ -29,17 +30,22 @@ class GeneralizedRCNNTransform(nn.Module):
         self.max_size = max_size
         self.image_mean = image_mean
         self.image_std = image_std
+        self.is_xla = is_xla
 
     def forward(self, images, targets=None):
         images = [img for img in images]
         for i in range(len(images)):
             image = images[i]
+            if self.is_xla and image.device.type != 'cpu':
+                raise RuntimeError("images should be passed as CPU tensors")
             target = targets[i] if targets is not None else targets
             if image.dim() != 3:
                 raise ValueError("images is expected to be a list of 3d tensors "
                                  "of shape [C, H, W], got {}".format(image.shape))
             image = self.normalize(image)
             image, target = self.resize(image, target)
+            if self.is_xla:
+                image = image.to(xm.xla_device())
             images[i] = image
             if targets is not None:
                 targets[i] = target
@@ -56,6 +62,17 @@ class GeneralizedRCNNTransform(nn.Module):
         return (image - mean[:, None, None]) / std[:, None, None]
 
     def resize(self, image, target):
+        if self.is_xla:
+            # Resize to a fixed size on TPU to avoid dynamicity.
+            new_h, new_w = 600, 800
+            image = torch.nn.functional.interpolate(
+                image[None], size=(new_h, new_w), mode='bilinear', align_corners=False)[0]
+
+            if target is None:
+                return image, target
+ 
+            raise NotImplementedError
+
         h, w = image.shape[-2:]
         im_shape = torch.tensor(image.shape[-2:])
         min_size = float(torch.min(im_shape))

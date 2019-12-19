@@ -73,7 +73,7 @@ class AnchorGenerator(nn.Module):
         hs = (h_ratios[:, None] * scales[None, :]).view(-1)
 
         base_anchors = torch.stack([-ws, -hs, ws, hs], dim=1) / 2
-        return base_anchors.round()
+        return base_anchors
 
     def set_cell_anchors(self, dtype, device):
         # if self.cell_anchors is not None:

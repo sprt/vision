@@ -1,5 +1,5 @@
 import torch
-import torch_xla
+import torch_xla.core.xla_model as xm
 
 
 def nms(boxes, scores, iou_threshold, post_nms_top_n):
@@ -30,10 +30,10 @@ def nms(boxes, scores, iou_threshold, post_nms_top_n):
         by NMS, sorted in decreasing order of scores
     """
     device = boxes.device
-    torch_xla._XLAC._xla_sync_multi([boxes, scores], devices=[])
+    xm.mark_step()
     boxes_cpu = boxes.cpu().clone()
     scores_cpu = scores.cpu().clone()
-    keep = torch.ops.torchvision.nms(boxes_cpu, scores_cpu, iou_threshold)
+    keep = torch.ops.torchvision.nms(boxes_cpu, scores_cpu, iou_threshold, post_nms_top_n)
     keep = keep.to(device=device)
     return keep
 

@@ -5,7 +5,7 @@ Implements the Generalized R-CNN framework
 
 from collections import OrderedDict
 import torch
-import torch_xla
+import torch_xla.core.xla_model as xm
 from torch import nn
 
 
@@ -60,7 +60,7 @@ class GeneralizedRCNN(nn.Module):
             sync_tensors = []
             for detection in detections:
                 sync_tensors.extend(list(detection.values()))
-            torch_xla._XLAC._xla_sync_multi(sync_tensors, devices=[])
+            xm.mark_step()
 
             detections_cpu = []
             for detection in detections:

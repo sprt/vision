@@ -3,10 +3,12 @@ Basic training script for Training MaskRCNN on TPUs.
 """
 
 import argparse
+import contextlib
 import logging
 import os
 import random
 import sys
+import time
 
 import numpy as np
 from PIL import Image, ImageDraw
@@ -43,6 +45,17 @@ COCO_INSTANCE_CATEGORY_NAMES = [
 ]
 
 
+@contextlib.contextmanager
+def _bench(name):
+    """Logs the time taken to execute a code block."""
+    start = time.time()
+    try:
+        yield
+    finally:
+        elapsed = time.time() - start
+        print(f'{name}: {elapsed:.3f}s')
+
+
 def get_dataset(name, image_set, transform):
     paths = {
         "coco": ('/coco/', get_coco, 91),
@@ -65,7 +78,15 @@ def get_transform(train):
 def parse_flags():
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        '--num_cores', type=int, default=None,
+        '--mode', type=str, default='test',
+        choices=('eval', 'test', 'train'),
+        help='eval computes the AP scores, test runs inference on a few sample images, '
+        'train trains the model')
+    parser.add_argument(
+        '--num-eval', type=int, default=50,
+        help='Number of validation set images to use in eval mode')
+    parser.add_argument(
+        '--num_cores', type=int, default=8,
         help='Number of TPU cores to train on (8 for single v2/v3 Cloud TPU)')
     parser.add_argument(
         "--use_cpu",
@@ -128,28 +149,21 @@ def process_prediction(output, threshold=0.05):
     return masks, pred_boxes, pred_class
 
 
-def do_prediction(image_path, use_cpu=False):
-    model = torchvision.models.detection.maskrcnn_resnet50_fpn(pretrained=True)
-    model.eval()
-
+def do_prediction(image_path, model, use_cpu=False):
     image = Image.open(image_path)
-    image = torchvision.transforms.functional.resize(image, (800, 600))
     image_tensor = torchvision.transforms.functional.to_tensor(image)
 
-    if not use_cpu:
-        # Send to single TPU device
-        device = xm.xla_device()
-        torch_xla._XLAC._xla_set_default_device(str(device))
-        model = model.to(device)
-        image_tensor = image_tensor.to(device)
+    with _bench('inference'):
+        output = model([image_tensor])
 
-    output = model([image_tensor])
-    print("output: {}".format(output))
-    print(torch_xla._XLAC._xla_metrics_report())
+    xm.master_print('# of boxes: {}'.format(len(output[0]['boxes'])))
 
-    masks, pred_boxes, pred_class = process_prediction(output)
-    image = overlay_output(image, masks, pred_boxes, pred_class)
-    image.save(os.path.join('/coco/out', os.path.basename(image_path)))
+    with _bench('cpu postprocessing'):
+        masks, pred_boxes, pred_class = process_prediction(output)
+        image = overlay_output(image, masks, pred_boxes, pred_class)
+        image.save(os.path.join('/coco/out', os.path.basename(image_path)))
+
+    xm.master_print(torch_xla._XLAC._xla_metrics_report())
 
 
 def train_one_epoch_tpu(
@@ -229,14 +243,41 @@ def do_train(num_cores):
         lr_scheduler.step()
 
 
-
-
 def main():
     FLAGS = parse_flags()
     logger.info("FLAGS: {}".format(FLAGS))
 
-    do_prediction('/coco/train2017/000000566234.jpg', use_cpu=FLAGS.use_cpu)
-    #do_train(FLAGS.num_cores)
+    def mark_step():
+        if not FLAGS.use_cpu:
+            with _bench('mark_step'):
+                xm.mark_step()
+
+    model = torchvision.models.detection.maskrcnn_resnet50_fpn(pretrained=True, is_xla=True)
+    model.eval()
+
+    device = xm.xla_device()
+    if not FLAGS.use_cpu:
+        model = model.to(device)
+
+    if FLAGS.mode == 'eval':
+        dataset_val, _ = get_dataset('coco', 'val', T.ToTensor())
+        dataset_val = torch.utils.data.Subset(dataset_val, range(FLAGS.num_eval))
+
+        data_loader_val = torch.utils.data.DataLoader(
+            dataset_val, batch_size=1, shuffle=False, num_workers=0,
+            collate_fn=utils.collate_fn)
+
+        evaluate(model, data_loader_val, device=device, move_tensors_to_device=False)
+    elif FLAGS.mode == 'test':
+        a = do_prediction('/coco/train2017/000000000308.jpg', model, use_cpu=FLAGS.use_cpu)
+        mark_step()
+        b = do_prediction('/coco/train2017/000000000394.jpg', model, use_cpu=FLAGS.use_cpu)
+        mark_step()
+        c = do_prediction('/coco/train2017/000000000326.jpg', model, use_cpu=FLAGS.use_cpu)
+        mark_step()
+        d = do_prediction('/coco/train2017/000000000368.jpg', model, use_cpu=FLAGS.use_cpu)
+    elif FLAGS.mode == 'train':
+        raise NotImplementedError
 
 
 if __name__ == "__main__":

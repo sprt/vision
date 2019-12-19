@@ -148,7 +148,7 @@ class MaskRCNN(FasterRCNN):
         >>> x = [torch.rand(3, 300, 400), torch.rand(3, 500, 400)]
         >>> predictions = model(x)
     """
-    def __init__(self, backbone, num_classes=None,
+    def __init__(self, backbone, num_classes=None, is_xla=False,
                  # transform parameters
                  min_size=800, max_size=1333,
                  image_mean=None, image_std=None,
@@ -194,7 +194,7 @@ class MaskRCNN(FasterRCNN):
                                                mask_dim_reduced, num_classes)
 
         super(MaskRCNN, self).__init__(
-            backbone, num_classes,
+            backbone, num_classes, is_xla,
             # transform parameters
             min_size, max_size,
             image_mean, image_std,
@@ -304,6 +304,7 @@ def maskrcnn_resnet50_fpn(pretrained=False, progress=True,
     Arguments:
         pretrained (bool): If True, returns a model pre-trained on COCO train2017
         progress (bool): If True, displays a progress bar of the download to stderr
+        xla (bool): If True, assume we're running on XLA and resize inputs to a fixed size
     """
     if pretrained:
         # no need to download the backbone if pretrained is set

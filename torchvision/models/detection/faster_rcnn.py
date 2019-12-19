@@ -140,7 +140,7 @@ class FasterRCNN(GeneralizedRCNN):
         >>> predictions = model(x)
     """
 
-    def __init__(self, backbone, num_classes=None,
+    def __init__(self, backbone, num_classes=None, is_xla=False,
                  # transform parameters
                  min_size=800, max_size=1333,
                  image_mean=None, image_std=None,
@@ -228,7 +228,7 @@ class FasterRCNN(GeneralizedRCNN):
             image_mean = [0.485, 0.456, 0.406]
         if image_std is None:
             image_std = [0.229, 0.224, 0.225]
-        transform = GeneralizedRCNNTransform(min_size, max_size, image_mean, image_std)
+        transform = GeneralizedRCNNTransform(min_size, max_size, image_mean, image_std, is_xla)
 
         super(FasterRCNN, self).__init__(backbone, rpn, roi_heads, transform)
 
