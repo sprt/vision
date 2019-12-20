@@ -30,7 +30,7 @@ def nms(boxes, scores, iou_threshold, post_nms_top_n):
         by NMS, sorted in decreasing order of scores
     """
     device = boxes.device
-    # XXX: adding this mark_step() call speeds up Mask R-CNN inference on TPU
+    # TODO: adding this mark_step() call speeds up Mask R-CNN inference on TPU
     # from 0.9 sec/im to 0.55 sec/im, reason unsure
     xm.mark_step()
     boxes_cpu = boxes.cpu().clone()

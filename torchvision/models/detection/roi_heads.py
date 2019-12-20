@@ -94,6 +94,7 @@ def project_masks_on_boxes(gt_masks, boxes, matched_idxs, M):
     matched_idxs = matched_idxs.to(boxes)
     rois = torch.cat([matched_idxs[:, None], boxes], dim=1)
     gt_masks = gt_masks[:, None].to(rois)
+    # TODO: use RoIAlign class
     return roi_align(gt_masks, rois, (M, M), 1)[:, 0]
 
 

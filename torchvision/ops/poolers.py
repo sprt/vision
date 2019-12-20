@@ -156,6 +156,7 @@ class MultiScaleRoIAlign(nn.Module):
             self.setup_scales(x, image_shapes)
 
         if num_levels == 1:
+            # TODO: use RoIAlign class
             return roi_align(
                 x[0], rois,
                 output_size=self.output_size,
