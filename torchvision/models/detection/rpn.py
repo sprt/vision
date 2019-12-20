@@ -355,6 +355,7 @@ class RegionProposalNetwork(torch.nn.Module):
         final_scores = []
         for boxes, scores, lvl, img_shape in zip(proposals, objectness, levels, image_shapes):
             boxes = box_ops.clip_boxes_to_image(boxes, img_shape)
+            # TODO: reenable remove_small_boxes according to strategy 2 of finding #5
             # non-maximum suppression, independently done per level
             keep = box_ops.batched_nms(boxes, scores, lvl, self.nms_thresh, self.post_nms_top_n)
             # keep only topk scoring predictions
